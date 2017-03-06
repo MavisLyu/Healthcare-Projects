@@ -1,0 +1,542 @@
+---
+title: "Machine Learning for Health Care: Homework 2"
+author: "Mengfei Lyu"
+output:
+  html_document:
+  fig_width: 7
+fig_height: 5
+---
+
+## Overview
+Homework 2 is about applying what you have learned in class into analysis in R. You will draw from both your learning in lecture and discussion with the skills you are developing in the workshop sessions.
+
+The homework is split into two parts: short questions to illustrate concepts, and a secondary analysis of data from a randomized controlled trial.
+
+**Homework 2 is due March 6th at the beginning of class.**
+
+### Data set
+The data set used for this homework comes from the International Stroke Trial. This was a study comparing the effectiveness of medications in a populaton of patients who had suffered strokes. The publication was in the leading British medical journal Lancet:
+http://www.sciencedirect.com/science/article/pii/S0140673697040117 (you may need to be on campus or use VPN)
+
+The data set is here:
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_corrected.csv
+(more information here: http://datashare.is.ed.ac.uk/handle/10283/128)
+
+The variable definitions files are also helpful:
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_variables.pdf
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_variables.csv
+
+## Objectives
+- git
+- debug
+- inject belief/knowledge by shifting from ML to MAP estimates
+- choosing MCAR, MAR, MNAR; choosing indicator and/or imputation
+- run machine learning algorithms: LR, NB, TAN, decision tree
+- reporting performance, using ggplot
+
+## Instructions
+
+For this homework, you will use git. **To submit the homework, email me a link to your git repository.** I should be able to type "git clone <url>" and have it download from a cloud service (github, bitbucket, etc). Note that if it is a private repository, you will need to permit me access to it (please provide access to jeremy.weiss@gmail.com).
+
+Your git repository should contain at least two commits with useful comments on what has changed from the previous version(s). This should be visible when I type in ```git log```. The submission I will grade is at the HEAD revision unless specified otherwise in your email. Include your .Rmd file and your .html file solutions in the repository with your name and andrew ID.
+
+  
+## Part 1: Concept questions (6 points)
+
+The code that follows introduces a toy data set, decision tree model, and two prediction functions.
+```{r eval=T, message=F}
+library(dplyr)
+library(caret)
+library(mice)
+library(plyr)
+
+library(rpart)
+library(knitr)
+library(ROCR)
+
+
+# synthetic depression data
+depressionData = data.frame( 
+  pregnant = c(1,0,1,1),
+  depressed = c("yes","yes","no","no") %>% as.factor(),
+  hospitalized = c(1, 0, 0, 0) %>% as.logical()
+) %>% tbl_df()
+
+# tree: a model that outputs the odds of hospitalization from inputs of data (datums)
+tree = data.frame( 
+  splitVariable = c("depressed", "pregnant", NA, NA, NA),
+  split = c("yes", 1, NA, NA, NA),
+  trueChild = c(2, 4, NA, NA, NA),
+  falseChild = c(3, 5, NA, NA, NA),
+  odds = c(NA, NA, 0.1, 2, 3)
+)
+
+predictOddsOnDataSet = function(tree, data, active = 1) {
+  apply(data, 1, (function(x) {predictedOdds(tree=tree, x, active=1)})  )
+}
+
+predictedOdds = function(tree, datum, active = 1) {
+  
+  if(is.na(tree[active,"splitVariable"])) { # leaf of tree, so output value
+    
+    return(tree$odds[active])
+    
+  } else {                                  # internal node of tree, so continue down tree to true/false child
+    
+    if( (datum[[tree[active,"splitVariable"] %>% as.character]] %>% as.character) == tree[active,"split"])
+      return(predictedOdds(tree, datum, active = tree[active,"trueChild"]))
+    
+    else
+      return(predictedOdds(tree, datum, active = tree[active,"falseChild"]))
+    
+  }
+  
+}
+
+# goal: run predictOddsOnDataSet(tree, depressionData)
+```
+  
+First, verify to yourself that, for the fourth patient in ```depressionData```, the tree should have output an odds of 0.1.
+
+Fix the function ```predictedOdds``` so that ```predictedOddsOnDataSet``` outputs the odds for each patient in data. Use the debugger functions like ```debugonce(predictedOdds)``` or ```browser()``` to inspect the code. 
+
+What did you change?
+
+**I added double quotation marks at tree[active,"trueChild"] and tree[active,"falseChild"] when we try to index using column names from dataframe.**
+
+Add a column of the predicted probabilities of hospitalization to depressionData. Display it.
+
+```{r eval=T, message=F}
+odds=predictOddsOnDataSet(tree, depressionData)
+probabilities=round(odds/(1+odds),2)
+depressionData["probabilities"]=probabilities
+depressionData
+```
+
+Using a threshold probability of 0.5, what is:
+
+- the accuracy of the model?
+- the sensitivity of the model?
+- the specificity of the model?
+- the precision of the model?
+- the recall of the model?
+
+```{r eval=T, message=F}
+predicthos <- function(X){
+  pre <- c()
+  for (x in X){
+    hospital <- FALSE
+    if (x>=0.5)
+      {hospital <- TRUE}
+    pre <- c(pre, hospital)
+  }
+  pre
+}
+depressionData=transform(depressionData,
+                         predict = factor(predicthos(probabilities),
+                                          levels=c("TRUE","FALSE")),
+                         hospitalized = factor(hospitalized,
+                                        levels = c("TRUE","FALSE")))
+confusion.matrix <- confusionMatrix(depressionData[["predict"]],depressionData[["hospitalized"]])
+confusion.matrix.table <- confusion.matrix$table
+confusion.matrix.table
+
+TP <- confusion.matrix.table[1,1]
+TN <- confusion.matrix.table[2,2]
+FP <- confusion.matrix.table[1,2]
+FN <- confusion.matrix.table[2,1]
+
+N <- TP+TN+FP+FN
+total.T <- TP+FN
+total.F <- TN+FP
+
+accuracy <- round((TP+TN)/N,2)
+sensitivity <- round(TP/total.T,2)
+specificity <- round(TN/total.F,2)
+precision <- round(TP/(TP+FP),2)
+recall <- round(TP/total.T,2)
+```
+
+**The accuracy of the model is `r accuracy`, the sensitivity of the model is `r sensitivity`, the specificity of the model is `r specificity`, the precision of the model is `r precision`, and the recall of the model is `r recall`.**
+
+Suppose you want to know the prevalence of diabetes in Pittsburgh. If you randomly survey 10 Pittsburghers and 5 of them state they have diabetes:
+
+- what is the maximum likelihood estimate for the prevalence of diabetes?
+
+**The MLE is 5/10 = 0.5**
+
+- given your strong belief specified by a beta prior of $\alpha = 11, \beta = 21$, what is the maximum a posteriori estimate for the prevalence of diabetes?
+
+**The MAP is (5+11-1)/(5+11-1+5+21-1) = 0.375**
+
+## Part 2: Analysis (9 points)
+
+#### Load Data
+```{r eval=T, message=F}
+IST <- read.csv("http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_corrected.csv ", header = TRUE, na.strings=c("","NA"))
+
+IST <- transform(IST,
+                 OCCODE = as.factor(mapvalues(OCCODE, c(1,2,3,4,8,9), c(1,1,0,0,0,0))))
+```
+#### Preliminaries
+- **Y:** What was the definition of the primary outcome in this study?
+- What is (are) the variable name(s) for the outcome?
+
+**Primary outcome: death within 14 days and death or dependency at 6 months.**
+**The variable names for the outcome are ID14 and OCCODE**
+
+- **U:** what is (are) the variable name(s) for the intervention, and what is (are) their possible values?
+
+**The variable names for the intervention are RXASP and RXHEP. The possible values for RXASP are Y and N. The possible values for RXHEP are M, L and N.**
+
+- **V, W:** describe the covariates included and the population being studied.
+❓
+**Covariates include non-fatal recurrent stroke and non-fatal strokes: Recurrent ischaemic strokes, Haemorrhagic strokes, Rransfused or fatal extracranial bleeds.**
+
+**Population: patients with evidence of an acute stroke (irrespective of severity) with onset less than 48 h previously, no evidence of intracranial haemorrhage, and no clear indications for, or contraindications to, heparin or aspirin. **
+ 
+- Construct a so-called Table 1 for groups of {aspirin, no aspirin} use, including information on age, gender, systolic blood pressure, and conscious state.
+
+```{r eval=T, message=F}
+#❓
+rconsc.table <- with(IST, table(RXASP,RCONSC))
+sex.table <- with(IST, table(RXASP,SEX))
+age.table <- with(IST, table(RXASP,AGE))
+rsbp <- with(IST, table(RXASP,RSBP))
+```
+
+#### Machine learning analysis
+Note: for this analysis, use a simple 50-50 train-test split.
+
+Let our outcome of interest be "dead or dependent at 6 months", i.e. so that we have a binary classification problem. What percent of patients are dead or dependent at 6 months in your train set and test set?
+
+```{r eval=T, message=F}
+#OCCODE
+n <- nrow(IST)
+train = IST[1:(n/2),]
+test = IST[-(1:(n/2)),]
+
+#train set
+n.train <- nrow(train)
+ind.target1 <- train[["OCCODE"]] == 1
+n.target1 <- sum(ind.target1)
+percent.target1 <- round((n.target1/n.train)*100,2)
+
+#test set
+n.test <- nrow(test)
+ind.target2 <- test[["OCCODE"]] == 1
+n.target2 <- sum(ind.target2)
+percent.target2 <- round((n.target2/n.test)*100,2)
+```
+**Train set: `r percent.target1`%**
+ 
+**Test set: `r percent.target2`%**
+ 
+Choose which variables to include in your model. For example, remove variables for outcomes at 14 days (because if you are dead at 14 days you are certainly dead at 6 months). Moreover, you should remove all features measured after baseline if you want to make a prediction based on baseline data. Similarly, specific indicators of the outcome should also be removed, since those are measurements past the baseline that are not our outcome of interest. For these reasons, you will need to remove clusters of variables. Justify your approach.
+
+**For Randomisation data, I will maintain most of the variables because they indicate the initial physical condition of patients and it may affect the outcome of the trial. However, I will remove all time and date related variables for randomisation but RDELAY.**
+
+**Remove all variables from Data collected on 14 days, because our target outcome is death or dependency at 6 months, and the variables for outcomes at 6 months covers the information within these removed variables.**
+
+**For Data collected at 6 months, remove variables related to details of death including date and reasons because they are measured after the baseline. In addition, remove separate indicators of status at 6 months because the outcome variable already contains these information.**
+
+```{r eval=T, message=F}
+
+variables <- c("RDELAY","RCONSC","SEX","AGE","RSLEEP","RATRIAL","RCT","RVISINF","RHEP24","RASP3","RSBP","RDEF1","RDEF2","RDEF3","RDEF4","RDEF5","RDEF6","RDEF7","RDEF8","STYPE","RXASP","RXHEP","FPLACE","FAP","FOAC","COUNTRY","NCCODE","CMPLASP","CMPLHEP","EXPDD","EXPD6","OCCODE")
+
+train <- train[variables]
+test <- test[variables]
+```
+
+Of the remaining variables, decide whether to exclude variables with missing data, impute them, and/or use indicator variables. (Note that if you choose multiple imputation for some variables, you would need to pool the results when evaluating performance, however for homework you may just use the first imputed data set). Justify your approach.
+
+```{r eval=T, message=F}
+for (v in variables){
+  if (any(is.na(train[v]))){
+    print(paste(v, "has missing data"))
+  }
+}
+
+for (v in variables){
+  if (any(is.na(test[v]))){
+    print(paste(v, "has missing data"))
+  }
+}
+
+```
+
+**The output of the above functions indicates that these variables contain missing data: RATRIAL,RHEP24,RASP3,FPLACE,FAP,FOAC,NCCODE,CMPLASP,CMPLHEP.**
+
+```{r eval=T, message=F}
+missing.variables <- c("RATRIAL","RHEP24","RASP3","FPLACE","FAP",
+                       "FOAC","NCCODE","CMPLASP","CMPLHEP")
+for (m in missing.variables){
+  num=sum(is.na(train[m]))
+  print(paste(m, round(num/n.train*100,2)))
+}
+
+```
+
+**RATRIAL: this variable doesn't code for patients in pilot phase, hence data is missing systematically. And missing data indicates a certain group of patients, hence replace missing data with "P" indicating pilot phase.**
+
+**RASP3,FPLACE,FAP,FOAC,NCCODE: over 5% data(safe threshold) is missing in the training set, hence exclude these variable.**
+
+**RHEP24,CMPLASP,CMPLHEP: these variables are missing at random, hence I will conduct imputation for them.**
+
+```{r eval=T, message=F}
+#RATRIAL
+levels(train[["RATRIAL"]]) <- c("N", "Y","P")
+levels(test[["RATRIAL"]]) <- c("N", "Y","P")
+train["RATRIAL"][is.na(train["RATRIAL"])] <- "P"
+
+#Exclusion
+train <- subset(train, select = -c(RASP3,FPLACE,FAP,FOAC,NCCODE) )
+test <- subset(test, select = -c(RASP3,FPLACE,FAP,FOAC,NCCODE)  )
+
+#Imputation
+m.train = mice(train, m = 5, maxit=2, seed = 0)
+m.test = mice(test, m = 5, maxit=2, seed = 0)
+train = complete(m.train,1)
+test = complete(m.test,1)
+```
+
+Use the following machine learning algorithms: logistic regression, naive Bayes, Tree Augmented Naive Bayes, and decision tree (specify any parameters you set that are not the default). The packages that you may find useful here are: "glm", "bnlearn", and "rpart", but you may use others if desired. In a table, report the accuracy with 95% confidence intervals for each algorithm.
+
+```{r eval=T, message=F}
+library(bnlearn)
+# convert character variables to factors
+factor.train <- transform(train, 
+            RCONSC = as.factor(RCONSC),
+            SEX = as.factor(SEX),
+            RSLEEP = as.factor(RSLEEP),
+            RATRIAL = as.factor(RATRIAL),
+            RCT = as.factor(RCT),
+            RVISINF = as.factor(RVISINF),
+            RHEP24 = as.factor(RHEP24),
+            RDEF1 = as.factor(RDEF1),
+            RDEF2 = as.factor(RDEF2),
+            RDEF3 = as.factor(RDEF3),
+            RDEF4 = as.factor(RDEF4),
+            RDEF5 = as.factor(RDEF5),
+            RDEF6 = as.factor(RDEF6),
+            RDEF7 = as.factor(RDEF7),
+            RDEF8 = as.factor(RDEF8),
+            STYPE = as.factor(STYPE),
+            RXASP = as.factor(RXASP),
+            RXHEP = as.factor(RXHEP),
+            COUNTRY = as.factor(COUNTRY),
+            CMPLASP = as.factor(CMPLASP),
+            CMPLHEP = as.factor(CMPLHEP)
+            )
+
+factor.test <- transform(test, 
+            RCONSC = as.factor(RCONSC),
+            SEX = as.factor(SEX),
+            RSLEEP = as.factor(RSLEEP),
+            RATRIAL = as.factor(RATRIAL),
+            RCT = as.factor(RCT),
+            RVISINF = as.factor(RVISINF),
+            RHEP24 = as.factor(RHEP24),
+            RDEF1 = as.factor(RDEF1),
+            RDEF2 = as.factor(RDEF2),
+            RDEF3 = as.factor(RDEF3),
+            RDEF4 = as.factor(RDEF4),
+            RDEF5 = as.factor(RDEF5),
+            RDEF6 = as.factor(RDEF6),
+            RDEF7 = as.factor(RDEF7),
+            RDEF8 = as.factor(RDEF8),
+            STYPE = as.factor(STYPE),
+            RXASP = as.factor(RXASP),
+            RXHEP = as.factor(RXHEP),
+            COUNTRY = as.factor(COUNTRY),
+            CMPLASP = as.factor(CMPLASP),
+            CMPLHEP = as.factor(CMPLHEP))
+
+#factor.variables <- names(Filter(is.factor, train))
+#for (f in factor.variables){
+  #print(levels(factor.train[[f]]))
+  #print(levels(factor.test[[f]]))
+#}
+
+# Logistic Regression
+# convert output from factor to numeric
+train.lr=transform(factor.train,
+                   OCCODE = as.numeric(as.character(OCCODE)))
+test.lr=transform(factor.test,
+                   OCCODE = as.numeric(as.character(OCCODE)))
+train.lr=model.matrix(~ ., data=train.lr) %>% as.data.frame()
+test.lr=model.matrix(~ ., data=test.lr) %>% as.data.frame()
+
+ist.glm <- glm(OCCODE ~ ., family = binomial(link="logit"), data = train.lr)
+lr.prediction <- predict.glm(ist.glm, newdata=test.lr, type="response")
+lr.prediction <- lr.prediction %>% replace(lr.prediction > 0.5, 1) %>% replace(lr.prediction <= 0.5, 0) 
+
+lr.table <- table(lr.prediction, test.lr$OCCODE)
+```
+
+```{r eval=T, message=F}
+library(bnlearn)
+
+
+# Naive Bayes
+# convert integer features to doubles
+train.nb=factor.train
+test.nb=factor.test
+
+train.nb[,sapply(train.nb, is.integer)] = lapply(train.nb[,sapply(train.nb, is.integer)], as.numeric)
+test.nb[,sapply(test.nb, is.integer)] = lapply(test.nb[,sapply(test.nb, is.integer)], as.numeric)
+
+fullset.nb  <- rbind(train.nb,test.nb)
+fullset.nb = discretize(fullset.nb)
+
+train.nb = fullset.nb[1:(n/2),] %>% as.data.frame()
+test.nb = fullset.nb[-(1:(n/2)),] %>% as.data.frame()
+
+
+nb = naive.bayes(train.nb, "OCCODE")
+fitted = bn.fit(nb, train.nb)
+#nb.prediction = predict(fitted,test.nb)
+nb.prediction = predict(fitted,test.nb)
+
+nb.table <- table(nb.prediction,test.nb$OCCODE)
+```
+
+```{r eval=T, message=F}
+library(bnlearn)
+# Tree Augmented Naive Bayes
+tan = tree.bayes(train.nb, "OCCODE")
+fittedTan = bn.fit(tan, train.nb)
+tan.prediction =predict(fittedTan, test.nb)
+tan.table <- table(tan.prediction,test.nb$OCCODE)
+```
+
+
+```{r eval=T, message=F}
+
+# Decision Tree
+train.dt=factor.train
+test.dt=factor.test
+
+ist.dt <- rpart(OCCODE~., data=train.dt, method="class",
+      control=rpart.control(minsplit=40, cp=0.001)) 
+printcp(ist.dt)
+pruned.tree <- prune(ist.dt, cp = 0.01)
+tree.prediction <- predict(pruned.tree,test.dt,type="class") 
+tree.table <- table(tree.prediction,test.dt$OCCODE)
+
+
+#Summary
+tables <- list(lr.table,nb.table,tan.table,tree.table)
+algorithms <- c("Logistic Regression","Naive Bayes","TAN","Decision Tree")
+accuracy <- c()
+for (t in tables){
+  accuracy <- c(accuracy, round((t[1,1]+t[2,2])/n.test,2))
+}
+summary.table <- cbind(algorithms,accuracy) %>% as.data.frame()
+summary.table <- summary.table %>% transmute(
+                           algorithms=algorithms,
+                           accuracy=as.numeric(as.character(accuracy)),
+                           error.upper=((1-accuracy)+
+                                1.96*sqrt((1-accuracy)*accuracy/n.test)),
+                           error.lower=(1-accuracy)-
+                                1.96*sqrt((1-accuracy)*accuracy/n.test),
+                           accuracy.lower=round(1-error.upper,2),
+                           accuracy.upper=round(1-error.lower,2)) %>% 
+                           subset(select = -c(error.upper,error.lower) ) %>% kable()
+summary.table
+```
+
+Construct an ROC (receiver operating characteristic) curve for each model and overlay them on a graph using ggplot. Include a legend. Hint: you will find the package "ROCR" helpful (or you might try the package "precrec", but I have not tested it).
+
+```{r eval=T, message=F}
+performances <- c()
+
+#Logistic Regression
+prob.table<-predict(ist.glm, test.lr, type="response") 
+comparison1 = data.frame(predictions = prob.table, actual= test.nb["OCCODE"]) %>% tbl_df()
+performanceROC <- prediction(comparison1[[1]], comparison1[[2]]) %>%performance("tpr","fpr")
+performances <- c(performances,performanceROC)
+
+#NB
+prob.table = predict(fitted,test.nb, prob=T) %>% attr("prob")
+comparison2 = data.frame(predictions = prob.table[2,], actual= test.nb["OCCODE"]) %>% tbl_df()
+performanceROC <- prediction(comparison2[[1]], comparison2[[2]]) %>%performance("tpr","fpr")
+performances <- c(performances,performanceROC)
+
+#TAN  
+prob.table = predict(fittedTan,test.nb, prob=T) %>% attr("prob")
+comparison3 = data.frame(predictions = prob.table[2,], actual= test.nb["OCCODE"]) %>% tbl_df()
+performanceROC <- prediction(comparison3[[1]], comparison3[[2]])%>%performance("tpr","fpr")
+performances <- c(performances,performanceROC)
+  
+#Decision Tree
+prob.table <- predict(pruned.tree,test.dt,type="prob") 
+comparison4 = data.frame(predictions = prob.table[,2], actual= test.nb["OCCODE"]) %>% tbl_df()
+performanceROC <- prediction(comparison4[[1]], comparison4[[2]]) %>%performance("tpr","fpr")
+performances <- c(performances,performanceROC)
+
+#plot
+models <- c("LR","NB","TAN","Tree")
+plotdf <- data.frame()
+for (i in 1:4){
+  df <- data.frame(y = performances[[i]]@y.values[[1]],
+                    x = performances[[i]]@x.values[[1]],
+                    model= factor(models[i]))
+  plotdf <- rbind(plotdf,df)
+}
+
+cbPalette <- c("#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+ggplot(data = plotdf, aes(x=x,y=y), group=model) +
+    geom_line(aes(color = model), alpha = 0.5,size=1.5) +
+    coord_cartesian(xlim=c(0,1),ylim=c(0,1))+
+    xlab("False positive rate") + ylab("True positive rate") +
+    ggtitle("ROC")+scale_colour_manual(values=cbPalette)
+
+```
+
+Construct a PR (precision recall) curve for each model. Include a legend.
+[response required]
+``` {r eval=T, message=F}
+comparisons <- list(comparison1,comparison2,comparison3,comparison4)
+performancesPR <-c()
+  
+for (i in 1:4){
+  performancePR = prediction(comparisons[[i]][[1]],comparisons[[i]][[2]]) %>%
+  performance("prec","rec")
+  performancesPR <- c(performancesPR,performancePR)
+}
+
+plotPRdf <- data.frame()
+for (i in 1:4){
+  df <- data.frame(y = performancesPR[[i]]@y.values[[1]],
+                    x = performancesPR[[i]]@x.values[[1]],
+                    model= factor(models[i]))
+  plotPRdf <- rbind(plotPRdf,df)
+}
+
+ggplot(data = plotPRdf, aes(x=x,y=y), group=model) +
+    geom_line(aes(color = model), alpha = 0.5,size=1.5) +
+    coord_cartesian(xlim=c(0,1),ylim=c(0,1))+
+    xlab("Recall") + ylab("Precision") +
+    ggtitle("PR")+scale_colour_manual(values=cbPalette)
+```
+
+#### Conclusions
+Let's draw conclusions from this study. Specifically,
+
+- how well are we able to predict death or dependence at 6 months? 
+
+**Overall, the best model constructed can predict death or dependence at 6 months with 0.74 accuracy (95% CI : 0.73-0.75).**
+
+- what is the average treatment effect of aspirin on death or dependence at 6 months? Is aspirin significantly better than the alternative?
+
+**ATE: 0.612-0.635=-0.023**
+**At 6 months, aspirin is not significantly better than the alternative.**
+
+- of the algorithms tested, which algorithms perform the best? Justify your statement.
+
+**From the analysis we did above: logistic regression has the highest accuracy 74%; and from ROC curve, logistic regression has the highest TPR when FPR are the same compared to other models; and from PR curve, logistic regression has the highest precision when recall is the same compared to other model.**
+
+**Hence logistic regression model performs the best for IST data set.**
+
+Congratulations, you've conducted a comparison of machine learning algorithms for mortality prediction! Commit your solutions to your git repository with an informative comment. ```git push``` will help you upload it to the cloud service you choose to use (github, bitbucket, etc).
